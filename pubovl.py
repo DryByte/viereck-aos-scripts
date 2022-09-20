@@ -170,6 +170,6 @@ def apply_script(protocol, connection, config):
             return connection.on_team_changed(self, old_team)
     
     class pubovlProtocol(protocol):
-        deuce_id = 33
+        deuce_id = 0
             
     return pubovlProtocol, pubovlConnection

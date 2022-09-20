@@ -4,17 +4,14 @@ when using pubovl the server sends a create_player packet only to you or
 the player you want it to use on. 
 essentially you are now spectator only on ur side while you are still a 
 normal player server-side/to everyone else. 
-
 scoreboard statistics may get out of sync. Ammo and blocks get out of 
 sync since leaving ovl refills you only client-side. this is not much of 
 a problem though since the server still keeps track of ur correct amount 
 of ammo and blocks. 
-
 ``/ovl`` to become a "hidden spectator". 
          use command again to leave that mode. 
 ``/ovl <player>`` to make someone else become a "hidden spectator". 
                   use again to make the player leave that mode. 
-
 codeauthors: VierEck., DryByte (https://github.com/DryByte)
 '''
 
@@ -41,11 +38,24 @@ def pubovl(connection, player):
     create_player.y = y
     create_player.z = z
     create_player.weapon = player.weapon
+    
+    # fake player client-side
+    create_deuce = loaders.CreatePlayer()
+    create_deuce.player_id = protocol.deuce_id
+    create_deuce.name = player.name
+    create_deuce.team = player.team.id
+    create_deuce.x = x
+    create_deuce.y = y
+    create_deuce.z = z
+    create_deuce.weapon = player.weapon
 
     if player.hidden:
         create_player.team = -1
 
         player.send_contained(create_player)
+        
+        player.send_contained(create_deuce)
+        
         player.send_chat("you are now using pubovl")
         protocol.irc_say('* %s is using pubovl' % player.name) #let the rest of the staff team know u r using this
     else:
@@ -56,6 +66,10 @@ def pubovl(connection, player):
         set_color.value = make_color(*player.color)
 
         player.send_contained(create_player, player)
+        
+        deuce_left = loaders.PlayerLeft()
+        deuce_left.player_id = protocol.deuce_id
+        player.send_contained(deuce_left, player)
 
         player.send_chat('you are no longer using pubovl')
         protocol.irc_say('* %s is no longer using pubovl' % player.name)
@@ -141,6 +155,9 @@ def apply_script(protocol, connection, config):
             if not self.client_info:
                 handshake_init = loaders.HandShakeInit()
                 self.send_contained(handshake_init)
+                
+            if self.player_id == self.protocol.deuce_id:
+                self.protocol.deuce_id = self.protocol.player_ids.pop()
 
             if not self.hidden:
                 return connection.spawn(self, pos)
@@ -151,5 +168,8 @@ def apply_script(protocol, connection, config):
                 self.hidden = False                             #idk why i cant irc relay this. 
 
             return connection.on_team_changed(self, old_team)
+    
+    class pubovlProtocol(protocol):
+        deuce_id = 33
             
-    return protocol, pubovlConnection
+    return pubovlProtocol, pubovlConnection

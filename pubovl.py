@@ -2,16 +2,19 @@
 spectate players without them knowing or give someone else that ability. 
 when using pubovl the server sends a create_player packet only to you or
 the player you want it to use on. 
+
 essentially you are now spectator only on ur side while you are still a 
 normal player server-side/to everyone else. 
 scoreboard statistics may get out of sync. Ammo and blocks get out of 
 sync since leaving ovl refills you only client-side. this is not much of 
 a problem though since the server still keeps track of ur correct amount 
 of ammo and blocks. 
+
 ``/ovl`` to become a "hidden spectator". 
          use command again to leave that mode. 
 ``/ovl <player>`` to make someone else become a "hidden spectator". 
                   use again to make the player leave that mode. 
+                  
 codeauthors: VierEck., DryByte (https://github.com/DryByte)
 '''
 
@@ -20,6 +23,7 @@ from pyspades.common import Vertex3, make_color
 from pyspades.constants import WEAPON_TOOL, WEAPON_KILL
 from pyspades import contained as loaders
 from pyspades import world
+from piqueserver.scheduler import Scheduler
 
 
 @command('pubovl', 'ovl', admin_only=True)
@@ -48,35 +52,54 @@ def pubovl(connection, player):
     create_deuce.y = y
     create_deuce.z = z
     create_deuce.weapon = player.weapon
+    
+    kill_deuce = loaders.KillAction()
+    kill_deuce.killer_id = protocol.deuce_id
+    kill_deuce.player_id = protocol.deuce_id
+    kill_deuce.kill_type = 2
+    kill_deuce.respawn_time = 1
 
     if player.hidden:
         create_player.team = -1
 
         player.send_contained(create_player)
-        
         player.send_contained(create_deuce)
         
+        if player.world_object.dead:          #kill the fake player if u enter pubovl while being dead
+            player.send_contained(kill_deuce)
+            
         player.send_chat("you are now using pubovl")
         protocol.irc_say('* %s is using pubovl' % player.name) #let the rest of the staff team know u r using this
     else:
         create_player.team = player.team.id
-
+        
         set_color = loaders.SetColor()
         set_color.player_id = player.player_id
         set_color.value = make_color(*player.color)
-
-        player.send_contained(create_player, player)
         
+        player.send_contained(create_player, player)
         deuce_left = loaders.PlayerLeft()
         deuce_left.player_id = protocol.deuce_id
         player.send_contained(deuce_left, player)
-
+        
+        if player.world_object.dead:                              #without this u could run around even though u r supposed to be
+            schedule = Scheduler(player.protocol)                 #dead. this could be abused for cheats so we dont allow this. 
+            schedule.call_later(0.1, player.spawn_dead_after_ovl) #need call_later cause otherwise u die as spectator which means u
+                                                                  #dont die at all. 
         player.send_chat('you are no longer using pubovl')
         protocol.irc_say('* %s is no longer using pubovl' % player.name)
 
 def apply_script(protocol, connection, config):
     class pubovlConnection(connection):
         hidden = False
+        
+        def spawn_dead_after_ovl(self):
+            kill_action = loaders.KillAction()
+            kill_action.killer_id = self.player_id
+            kill_action.player_id = self.player_id
+            kill_action.kill_type = 2
+            kill_action.respawn_time = self.get_respawn_time() #not actual spawn time, maybe fix this later. 
+            self.send_contained(kill_action)
         
         def kill(self, by=None, kill_type=WEAPON_KILL, grenade=None):
             if self.hp is None:
@@ -97,9 +120,16 @@ def apply_script(protocol, connection, config):
                 by.add_score(1)
             kill_action.respawn_time = self.get_respawn_time() + 1
             if self.hidden: 
-                for players in self.protocol.players.values():  #dont send kill packet to user of pubovl otherwise
-                    if players.player_id is not self.player_id: #it immediately kicks them out of spectator mode
+                for players in self.protocol.players.values():
+                    if players.player_id is not self.player_id:
                         players.send_contained(kill_action)
+                    else: # send kill packet with ur fake player to urself instead. 
+                        if by is None:
+                            kill_action.killer_id = kill_action.player_id = self.protocol.deuce_id
+                        else:
+                            kill_action.killer_id = by.player_id
+                            self.send_chat('pubovl: u were killed by %s' % by.name) #if server full at least u know who u got killed by
+                        self.send_contained(kill_action)
             else:
                  self.protocol.broadcast_contained(kill_action, save=True)   
             self.world_object.dead = True
@@ -147,9 +177,11 @@ def apply_script(protocol, connection, config):
                     for players in self.protocol.players.values():
                         if players.player_id is not self.player_id:
                             players.send_contained(create_player)
+                        else:
+                            create_player.player_id = self.protocol.deuce_id
+                            players.send_contained(create_player)
                 else:
                     self.protocol.broadcast_contained(create_player, save=True)
-            if not spectator:
                 self.on_spawn((x, y, z))
 
             if not self.client_info:
@@ -157,7 +189,28 @@ def apply_script(protocol, connection, config):
                 self.send_contained(handshake_init)
                 
             if self.player_id == self.protocol.deuce_id:
+                for players in self.protocol.players.values():
+                    if players.hidden:
+                        deuce_left = loaders.PlayerLeft()
+                        deuce_left.player_id = self.protocol.deuce_id
+                        players.send_contained(deuce_left)
+                        
                 self.protocol.deuce_id = self.protocol.player_ids.pop()
+                self.protocol.player_ids.put_back(self.protocol.deuce_id)
+                
+                for players in self.protocol.players.values():
+                    if players.hidden:
+                        x, y, z = players.world_object.position.get()
+                        create_deuce = loaders.CreatePlayer()
+                        create_deuce.player_id = self.protocol.deuce_id
+                        create_deuce.name = players.name
+                        create_deuce.team = players.team.id
+                        create_deuce.x = x
+                        create_deuce.y = y
+                        create_deuce.z = z
+                        create_deuce.weapon = players.weapon
+                        create_deuce.weapon = players.weapon
+                        players.send_contained(create_deuce)
 
             if not self.hidden:
                 return connection.spawn(self, pos)

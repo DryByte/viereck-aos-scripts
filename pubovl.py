@@ -43,16 +43,6 @@ def pubovl(connection, player):
     create_player.z = z
     create_player.weapon = player.weapon
     
-    # fake player client-side
-    create_deuce = loaders.CreatePlayer()
-    create_deuce.player_id = protocol.deuce_id
-    create_deuce.name = player.name
-    create_deuce.team = player.team.id
-    create_deuce.x = x
-    create_deuce.y = y
-    create_deuce.z = z
-    create_deuce.weapon = player.weapon
-    
     kill_deuce = loaders.KillAction()
     kill_deuce.killer_id = protocol.deuce_id
     kill_deuce.player_id = protocol.deuce_id
@@ -63,7 +53,7 @@ def pubovl(connection, player):
         create_player.team = -1
 
         player.send_contained(create_player)
-        player.send_contained(create_deuce)
+        player.send_contained(player.spawn_deuce())
         
         if player.world_object.dead:          #kill the fake player if u enter pubovl while being dead
             player.send_contained(kill_deuce)
@@ -100,6 +90,18 @@ def apply_script(protocol, connection, config):
             kill_action.kill_type = 2
             kill_action.respawn_time = self.get_respawn_time() #not actual spawn time, maybe fix this later. 
             self.send_contained(kill_action)
+            
+        def spawn_deuce(self): # fake client-side player
+            x, y, z = self.world_object.position.get()
+            create_deuce = loaders.CreatePlayer()
+            create_deuce.player_id = self.protocol.deuce_id
+            create_deuce.name = self.name
+            create_deuce.team = self.team.id
+            create_deuce.x = x
+            create_deuce.y = y
+            create_deuce.z = z
+            create_deuce.weapon = self.weapon
+            return create_deuce
         
         def kill(self, by=None, kill_type=WEAPON_KILL, grenade=None):
             if self.hp is None:
@@ -119,17 +121,25 @@ def apply_script(protocol, connection, config):
             if by is not None and by is not self:
                 by.add_score(1)
             kill_action.respawn_time = self.get_respawn_time() + 1
+            
+            kill_deuce = loaders.KillAction()
+            kill_deuce.kill_type = kill_type
+            kill_deuce.player_id = self.protocol.deuce_id
+            if by is None:
+                kill_deuce.killer_id = kill_deuce.player_id = self.protocol.deuce_id
+            else:
+                kill_deuce.killer_id = by.player_id
+                kill_deuce.player_id = self.protocol.deuce_id
+            kill_deuce.respawn_time = self.get_respawn_time() + 1
+            
             if self.hidden: 
                 for players in self.protocol.players.values():
                     if players.player_id is not self.player_id:
                         players.send_contained(kill_action)
-                    else: # send kill packet with ur fake player to urself instead. 
-                        if by is None:
-                            kill_action.killer_id = kill_action.player_id = self.protocol.deuce_id
-                        else:
-                            kill_action.killer_id = by.player_id
-                            self.send_chat('pubovl: u were killed by %s' % by.name) #if server full at least u know who u got killed by
-                        self.send_contained(kill_action)
+                    else: # send kill packet with ur fake player to urself instead.
+                        if by is not None:
+                            self.send_chat('[pubovl]: u were killed by %s' % by.name) #if server full at least u know who u got killed by
+                        self.send_contained(kill_deuce)
             else:
                  self.protocol.broadcast_contained(kill_action, save=True)   
             self.world_object.dead = True
@@ -178,8 +188,7 @@ def apply_script(protocol, connection, config):
                         if players.player_id is not self.player_id:
                             players.send_contained(create_player)
                         else:
-                            create_player.player_id = self.protocol.deuce_id
-                            players.send_contained(create_player)
+                            self.send_contained(self.spawn_deuce())
                 else:
                     self.protocol.broadcast_contained(create_player, save=True)
                 self.on_spawn((x, y, z))
@@ -200,17 +209,7 @@ def apply_script(protocol, connection, config):
                 
                 for players in self.protocol.players.values():
                     if players.hidden:
-                        x, y, z = players.world_object.position.get()
-                        create_deuce = loaders.CreatePlayer()
-                        create_deuce.player_id = self.protocol.deuce_id
-                        create_deuce.name = players.name
-                        create_deuce.team = players.team.id
-                        create_deuce.x = x
-                        create_deuce.y = y
-                        create_deuce.z = z
-                        create_deuce.weapon = players.weapon
-                        create_deuce.weapon = players.weapon
-                        players.send_contained(create_deuce)
+                        players.send_contained(players.spawn_deuce())
 
             if not self.hidden:
                 return connection.spawn(self, pos)
